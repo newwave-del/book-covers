@@ -32,11 +32,7 @@
     .right { text-align:right; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); }
     @media (max-width:720px){ .grid { grid-template-columns:1fr; } }
-
-    /* 썸네일 */
     .thumb img { max-width:64px; max-height:90px; display:block; object-fit:contain; }
-
-    /* 오버레이(마크다운 수동 복사용) */
     .overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,.5);
       display: none; align-items: center; justify-content: center; padding: 20px; z-index: 9999;
@@ -229,7 +225,8 @@
 
   function setRow(tr, {title, cover, status}) {
     tr.querySelector('.title').textContent = title || '';
-    tr.querySelector('.coverurl').textContent = cover || '';
+    // 여기서 표기 형식 변경: "표지_이미지: URL"
+    tr.querySelector('.coverurl').textContent = cover ? `표지_이미지: ${cover}` : '';
     const thumb = tr.querySelector('.thumb');
     thumb.innerHTML = '';
     if (cover) {
@@ -304,8 +301,15 @@
       s = String(s);
       return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
-    const head = ['idx','isbn','title','cover_url','status'];
-    const body = rows.map(r => [r.idx, r.isbn, r.title, r.cover, r.status].map(esc).join(',')).join('\n');
+    // 헤더명도 표지_이미지로
+    const head = ['idx','isbn','title','표지_이미지','status'];
+    const body = rows.map(r => [
+      r.idx,
+      r.isbn,
+      r.title,
+      r.cover ? `표지_이미지: ${r.cover}` : '',
+      r.status
+    ].map(esc).join(',')).join('\n');
     return head.join(',') + '\n' + body + '\n';
   }
 
@@ -315,8 +319,9 @@
     lines.push('|:-:|:---|:---|:---|:-:|');
     for (const r of rows) {
       const safeTitle = (r.title || '').replace(/\|/g,'\\|');
-      const safeUrl = (r.cover || '').replace(/\|/g,'\\|');
-      lines.push(`| ${r.idx} | ${r.isbn} | ${safeTitle} | ${safeUrl} | ${r.status} |`);
+      const value = r.cover ? `표지_이미지: ${r.cover}` : '';
+      const safeVal = value.replace(/\|/g,'\\|');
+      lines.push(`| ${r.idx} | ${r.isbn} | ${safeTitle} | ${safeVal} | ${r.status} |`);
     }
     return lines.join('\n') + '\n';
   }
@@ -331,9 +336,7 @@
     a.remove();
   }
 
-  // 강제 복사(로컬 file://, iPad Safari 안전장치 포함)
   async function copyTextRobust(text) {
-    // 1) navigator.clipboard (가능하면)
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
@@ -341,8 +344,6 @@
         return true;
       }
     } catch(_) {}
-
-    // 2) execCommand('copy') 강제
     try {
       const ta = document.createElement('textarea');
       ta.value = text;
@@ -351,15 +352,11 @@
       ta.style.top='-1000px';
       ta.style.opacity='0';
       document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      ta.setSelectionRange(0, ta.value.length);
+      ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
       const ok = document.execCommand('copy');
       document.body.removeChild(ta);
       if (ok) { alert('복사 완료.'); return true; }
     } catch(_) {}
-
-    // 3) 최종 수동 복사 오버레이
     mdText.value = text;
     mdOverlay.style.display = 'flex';
     return false;
@@ -377,7 +374,6 @@
     await copyTextRobust(md);
   });
 
-  // 오버레이 핸들러
   closeOverlay.addEventListener('click', ()=> { mdOverlay.style.display = 'none'; });
   selectAllBtn.addEventListener('click', ()=>{
     mdText.focus();
