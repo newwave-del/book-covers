@@ -1,18 +1,19 @@
 <!doctype html>
+<html lang="ko">
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>책표지 URL 추출 (data4library · srchDtlList)</title>
+<title>책표지 URL 추출 (srchDtlList · 단일파일·간편)</title>
 <style>
   :root { --fg:#111; --muted:#666; --line:#eee; }
   body { font-family: system-ui, -apple-system, sans-serif; color:var(--fg);
-         max-width: 920px; margin: 24px auto; padding: 0 12px; }
+         max-width: 760px; margin: 24px auto; padding: 0 12px; }
   h1 { font-size: 20px; margin: 0 0 12px; }
   .controls { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
-  .grid3 { display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; }
+  .grid1 { display:grid; grid-template-columns: 1fr; gap:8px; }
   .muted { color: var(--muted); font-size: 12px; }
   input[type="text"], textarea { padding: 8px; width: 100%; box-sizing: border-box; }
   textarea { min-height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  button { padding: 10px 14px; cursor: pointer; }
+  button { padding: 10px 14px; cursor: pointer; pointer-events:auto; }
   .banner { padding: 10px 12px; border-radius: 8px; margin: 12px 0; border: 1px solid transparent; }
   .banner.info { background:#eef6ff; border-color:#c9e1ff; }
   .banner.error { background:#ffe8e8; border-color:#ffb2b2; }
@@ -26,22 +27,19 @@
   td.url { word-break: break-all; }
   td img { max-height: 120px; }
   .actions { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 16px; }
-  .count { margin:6px 0 0; }
+  .alive { font-size:11px; color:#0a5; }
 </style>
 
 <h1>책표지 URL 추출 (srchDtlList)</h1>
 
 <div class="controls">
   <div>
-    <div class="grid3">
+    <div class="grid1">
       <input id="key" type="text" placeholder="data4library authKey (승인 후 사용)">
-      <input id="dummy" type="text" placeholder="쉼표/줄바꿈/스페이스 모두 구분자로 인식" disabled>
-      <input id="file" type="file" accept=".txt">
     </div>
-    <div class="muted">※ 공개 정적 페이지. 키는 하드코딩 금지 → 조회 때만 입력.</div>
-    <div class="muted count" id="countInfo"></div>
+    <div class="muted">※ 공개 정적 페이지. 키는 코드에 박지 말고 입력해서 써. <span id="alive" class="alive" aria-live="polite"></span></div>
   </div>
-  <button id="go">조회</button>
+  <button id="go" type="button" aria-label="조회">조회</button>
 </div>
 
 <div style="margin-top:8px;">
@@ -64,48 +62,33 @@
 </details>
 
 <script>
+(function(){
   // ---------- 유틸 ----------
   const $ = s => document.querySelector(s);
   const banner = $("#banner");
   const dbg = $("#debug");
   const copyBtn = $("#copyMd");
   const csvBtn = $("#downloadCsv");
-  const countInfo = $("#countInfo");
-  const fileInput = $("#file");
+  const aliveEl = $("#alive");
 
+  function alive(msg){ if (aliveEl) aliveEl.textContent = msg || ""; }
   function showBanner(type, msg){ banner.className = `banner ${type}`; banner.textContent = msg; }
   function clearBanner(){ banner.className = ""; banner.textContent = ""; }
-
   function setDebug(txt){ dbg.textContent = txt || ""; }
-  function appendDebug(txt){
-    if (!txt) return;
-    dbg.textContent += (dbg.textContent ? "\\n" : "") + txt;
-  }
+  function appendDebug(txt){ if (!txt) return; dbg.textContent += (dbg.textContent ? "\\n" : "") + txt; }
   const pretty = (obj) => JSON.stringify(obj, null, 2);
 
-  function maskKey(k){
-    if (!k) return "";
-    const t = k.trim();
-    return t.length > 8 ? (t.slice(0,4) + "…" + t.slice(-4)) : "****";
-  }
+  function maskKey(k){ if (!k) return ""; const t = k.trim(); return t.length > 8 ? (t.slice(0,4) + "…" + t.slice(-4)) : "****"; }
   function redactKeyInUrl(u){
-    try {
-      const x = new URL(u);
-      if (x.searchParams.has("authKey")) x.searchParams.set("authKey", maskKey(x.searchParams.get("authKey")));
-      return x.toString();
-    } catch { return u; }
+    try { const x = new URL(u); if (x.searchParams.has("authKey")) x.searchParams.set("authKey", maskKey(x.searchParams.get("authKey"))); return x.toString(); }
+    catch { return u; }
   }
 
   function uniq(arr){ return Array.from(new Set(arr)); }
-
   function parseISBNs(raw){
-    // 어떤 구분자든(줄바꿈/쉼표/세미콜론/스페이스/탭) 다 자르고,
-    // 각 토큰에서 숫자·X만 남김 → 10~13자만 유효
-    const tokens = raw.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    const tokens = raw.split(/[\\s,;]+/).map(s => s.trim()).filter(Boolean);
     const cleaned = tokens.map(s => s.replace(/[^0-9Xx]/g, '')).filter(s => s.length >= 10);
-    const out = uniq(cleaned);
-    countInfo.textContent = `토큰: ${tokens.length} → 유효 ISBN: ${out.length}`;
-    return out;
+    return uniq(cleaned);
   }
 
   function detectApiError(json){
@@ -141,7 +124,6 @@
     };
   }
 
-  
   async function fetchDtlOnce(authKey, isbn){
     const url = buildDtlURL(authKey, isbn);
     appendDebug("srchDtlList 요청: " + redactKeyInUrl(url));
@@ -154,50 +136,17 @@
     if (res.status === 429) return { isbn13:isbn, fatal:true, error:"요청 과다(429)" };
     if (res.status >= 500) return { isbn13:isbn, fatal:true, error:`서버 오류(${res.status})` };
 
-    // Read the body ONCE as text, then try to parse JSON from it.
-    const contentType = (res.headers.get("content-type") || "").toLowerCase();
-    let textBody = "";
-    try { textBody = await res.text(); }
-    catch (e) {
-      appendDebug("본문 읽기 실패: " + e.message);
-      return { isbn13:isbn, fatal:true, error:"응답 본문을 읽지 못함" };
-    }
+    const ctype = (res.headers.get("content-type") || "").toLowerCase();
+    let text = "";
+    try { text = await res.text(); }
+    catch (e) { appendDebug("본문 읽기 실패: " + e.message); return { isbn13:isbn, fatal:true, error:"응답 본문 읽기 실패" }; }
 
     let json = null;
-    if (contentType.includes("application/json")) {
-      try { json = JSON.parse(textBody); }
-      catch (e) {
-        appendDebug("JSON 파싱 실패(컨텐츠타입 JSON 표기): " + e.message + "\n본문 앞부분:\n" + textBody.slice(0, 300));
-        return { isbn13:isbn, fatal:true, error:"JSON 파싱 실패" };
-      }
+    if (ctype.includes("application/json")) {
+      try { json = JSON.parse(text); }
+      catch (e) { appendDebug("JSON 파싱 실패: " + e.message + "\\n본문 앞부분:\\n" + text.slice(0,300)); return { isbn13:isbn, fatal:true, error:"JSON 파싱 실패" }; }
     } else {
-      // 서버가 HTML/XML을 돌려준 경우 그대로 노출
-      appendDebug("JSON 아님(content-type=" + contentType + ")\n본문 앞부분:\n" + textBody.slice(0, 300));
-      return { isbn13:isbn, fatal:true, error:"JSON 아님/응답 형식 오류" };
-    }
-
-    const apiErr = detectApiError(json);
-    if (apiErr.isError){
-      appendDebug("응답(에러 바디):\n" + pretty(json));
-      return { isbn13:isbn, fatal:true, error: apiErr.message || "API 오류" };
-    }
-
-    const row = pickBook(json);
-    if (!row.isbn13) row.isbn13 = isbn;
-    appendDebug("OK → " + row.isbn13 + " : " + row.bookname);
-    return row;
-  }
-
-
-    if (res.status === 401 || res.status === 403) return { isbn13:isbn, fatal:true, error:"API 키 권한 오류(401/403)" };
-    if (res.status === 429) return { isbn13:isbn, fatal:true, error:"요청 과다(429)" };
-    if (res.status >= 500) return { isbn13:isbn, fatal:true, error:`서버 오류(${res.status})` };
-
-    let json;
-    try { json = await res.json(); }
-    catch {
-      const text = await res.text();
-      appendDebug("응답(비JSON):\\n" + text.slice(0, 300));
+      appendDebug("JSON 아님(content-type=" + ctype + ")\\n본문 앞부분:\\n" + text.slice(0,300));
       return { isbn13:isbn, fatal:true, error:"JSON 아님/응답 형식 오류" };
     }
 
@@ -256,7 +205,7 @@
 
     copyBtn.onclick = async () => {
       try { await navigator.clipboard.writeText(md); alert("복사 완료!"); }
-      catch { alert("복사 실패. 수동으로 복사해줘."); }
+      catch { alert("복사 실패. covers.md를 직접 복사해줘."); }
     };
 
     csvBtn.onclick = () => {
@@ -278,21 +227,21 @@
   function escapeHtml(s){ return String(s ?? "").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
   function escapeAttr(s){ return String(s ?? "").replace(/"/g, '&quot;'); }
 
-  // 파일 업로드로 txt 읽기 → textarea 채우기
-  fileInput.addEventListener("change", async (e) => {
-    const f = e.target.files?.[0]; if (!f) return;
-    const text = await f.text();
-    $("#isbnBox").value = text;
-    // 즉시 카운트 반영
-    parseISBNs(text);
+  // 초기 바인딩 (DOMContentLoaded 보장)
+  document.addEventListener("DOMContentLoaded", () => {
+    alive("JS 로드됨");
+    const go = $("#go");
+    if (go) {
+      go.addEventListener("click", onGoClick, false);
+    }
   });
 
-  // 즉시 카운트 표기
-  $("#isbnBox").addEventListener("input", (e) => parseISBNs(e.target.value));
-  parseISBNs($("#isbnBox").value);
+  // 이벤트 위임(혹시 위 바인딩 실패해도 보조로 작동)
+  document.addEventListener("click", (ev) => {
+    if (ev.target && ev.target.id === "go") onGoClick(ev);
+  });
 
-  // ---------- 버튼 ----------
-  $("#go").onclick = async () => {
+  async function onGoClick(ev){
     clearBanner(); setDebug("");
     copyBtn.disabled = true; csvBtn.disabled = true; $("#tableBox").innerHTML = "";
 
@@ -302,7 +251,7 @@
     if (!key){ showBanner("error", "API 키 넣어."); return; }
     if (isbns.length === 0){ showBanner("error", "ISBN이 없음."); return; }
 
-    showBanner("info", "조회 중… (" + maskKey(key) + `), ${isbns.length}권`);
+    showBanner("info", `조회 중… (${maskKey(key)}), ${isbns.length}권`);
     try {
       const rows = await runBatch(key, isbns);
       clearBanner();
@@ -310,5 +259,7 @@
     } catch (e){
       showBanner("error", `중단: ${e.message}`);
     }
-  };
-</script>
+  }
+
+})();</script>
+</html>
