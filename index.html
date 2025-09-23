@@ -141,6 +141,7 @@
     };
   }
 
+  
   async function fetchDtlOnce(authKey, isbn){
     const url = buildDtlURL(authKey, isbn);
     appendDebug("srchDtlList 요청: " + redactKeyInUrl(url));
@@ -148,6 +149,45 @@
     let res;
     try { res = await fetch(url, { headers: { "Accept": "application/json" } }); }
     catch (e) { appendDebug("네트워크 오류: " + e.message); return { isbn13:isbn, error:"네트워크 오류" }; }
+
+    if (res.status === 401 || res.status === 403) return { isbn13:isbn, fatal:true, error:"API 키 권한 오류(401/403)" };
+    if (res.status === 429) return { isbn13:isbn, fatal:true, error:"요청 과다(429)" };
+    if (res.status >= 500) return { isbn13:isbn, fatal:true, error:`서버 오류(${res.status})` };
+
+    // Read the body ONCE as text, then try to parse JSON from it.
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    let textBody = "";
+    try { textBody = await res.text(); }
+    catch (e) {
+      appendDebug("본문 읽기 실패: " + e.message);
+      return { isbn13:isbn, fatal:true, error:"응답 본문을 읽지 못함" };
+    }
+
+    let json = null;
+    if (contentType.includes("application/json")) {
+      try { json = JSON.parse(textBody); }
+      catch (e) {
+        appendDebug("JSON 파싱 실패(컨텐츠타입 JSON 표기): " + e.message + "\n본문 앞부분:\n" + textBody.slice(0, 300));
+        return { isbn13:isbn, fatal:true, error:"JSON 파싱 실패" };
+      }
+    } else {
+      // 서버가 HTML/XML을 돌려준 경우 그대로 노출
+      appendDebug("JSON 아님(content-type=" + contentType + ")\n본문 앞부분:\n" + textBody.slice(0, 300));
+      return { isbn13:isbn, fatal:true, error:"JSON 아님/응답 형식 오류" };
+    }
+
+    const apiErr = detectApiError(json);
+    if (apiErr.isError){
+      appendDebug("응답(에러 바디):\n" + pretty(json));
+      return { isbn13:isbn, fatal:true, error: apiErr.message || "API 오류" };
+    }
+
+    const row = pickBook(json);
+    if (!row.isbn13) row.isbn13 = isbn;
+    appendDebug("OK → " + row.isbn13 + " : " + row.bookname);
+    return row;
+  }
+
 
     if (res.status === 401 || res.status === 403) return { isbn13:isbn, fatal:true, error:"API 키 권한 오류(401/403)" };
     if (res.status === 429) return { isbn13:isbn, fatal:true, error:"요청 과다(429)" };
