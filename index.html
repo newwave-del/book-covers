@@ -86,9 +86,23 @@
 
   function uniq(arr){ return Array.from(new Set(arr)); }
   function parseISBNs(raw){
-    const tokens = raw.split(/[\\s,;]+/).map(s => s.trim()).filter(Boolean);
-    const cleaned = tokens.map(s => s.replace(/[^0-9Xx]/g, '')).filter(s => s.length >= 10);
-    return uniq(cleaned);
+    // 1) Normalize whitespace to space
+    const norm = String(raw || "").replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]+/g, ' ');
+    // 2) Robust extraction: find all 13-digit or 10-digit (last can be X) sequences
+    const matches = norm.match(/\d{13}|\d{9}[\dXx]/g) || [];
+    // 3) Uppercase trailing x
+    const cleaned = matches.map(s => s.toUpperCase());
+    // 4) Dedup while preserving order
+    const seen = new Set(); const out = [];
+    for (const m of cleaned){ if (!seen.has(m)) { seen.add(m); out.push(m); } }
+    // Update a small preview/count on screen
+    const info = document.getElementById("debug");
+    if (info){
+      const preview = out.slice(0, 10).join(", ");
+      const more = out.length > 10 ? ` …(+${out.length-10})` : "";
+      if (!info.textContent) info.textContent = `파싱된 ISBN(${out.length}): ${preview}${more}`;
+    }
+    return out;
   }
 
   function detectApiError(json){
@@ -129,7 +143,7 @@
     appendDebug("srchDtlList 요청: " + redactKeyInUrl(url));
 
     let res;
-    try { res = await fetch(url, { headers: { "Accept": "application/json" } }); }
+    try { res = await fetch(url); }
     catch (e) { appendDebug("네트워크 오류: " + e.message); return { isbn13:isbn, error:"네트워크 오류" }; }
 
     if (res.status === 401 || res.status === 403) return { isbn13:isbn, fatal:true, error:"API 키 권한 오류(401/403)" };
