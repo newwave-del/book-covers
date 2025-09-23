@@ -1,0 +1,255 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>책표지 URL 추출 (data4library · srchDtlList)</title>
+<style>
+  :root { --fg:#111; --muted:#666; --line:#eee; }
+  body { font-family: system-ui, -apple-system, sans-serif; color:var(--fg);
+         max-width: 920px; margin: 24px auto; padding: 0 12px; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .controls { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+  .grid2 { display:grid; grid-template-columns: 1fr; gap:8px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  input[type="text"], textarea { padding: 8px; width: 100%; box-sizing: border-box; }
+  textarea { min-height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  button { padding: 10px 14px; cursor: pointer; }
+  .banner { padding: 10px 12px; border-radius: 8px; margin: 12px 0; border: 1px solid transparent; }
+  .banner.info { background:#eef6ff; border-color:#c9e1ff; }
+  .banner.error { background:#ffe8e8; border-color:#ffb2b2; }
+  .banner.success { background:#e9f8ed; border-color:#b4e3c3; }
+  .row { display: grid; grid-template-columns: 1fr 1.6fr 140px 1fr; gap: 8px;
+         padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .small { font-size: 12px; }
+  details { margin: 10px 0; }
+  code, pre { font-family: ui-monospace, Consolas, Menlo, SFMono-Regular, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 0; }
+  th, td { border: 1px solid var(--line); padding: 6px 8px; vertical-align: top; }
+  th { background: #f7f7f7; text-align: left; }
+  td.url { word-break: break-all; }
+  td img { max-height: 120px; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 16px; }
+</style>
+
+<h1>책표지 URL 추출 (srchDtlList)</h1>
+
+<div class="controls">
+  <div>
+    <div class="grid2">
+      <input id="key" type="text" placeholder="data4library authKey (승인 후 사용)">
+    </div>
+    <div class="muted">※ 이 페이지는 공개 정적 페이지야. 키를 코드에 하드코딩하지 말고, 조회할 때마다 입력해서 써.</div>
+  </div>
+  <button id="go">조회</button>
+</div>
+
+<div style="margin-top:8px;">
+  <div class="muted small">ISBN 목록(줄바꿈 구분):</div>
+  <textarea id="isbnBox">9788936433598
+9788979196184</textarea>
+</div>
+
+<div class="actions">
+  <button id="copyMd" disabled>마크다운 표 복사</button>
+  <button id="downloadCsv" disabled>CSV 다운로드</button>
+</div>
+
+<div id="banner"></div>
+<div id="tableBox"></div>
+
+<details>
+  <summary class="small">디버그 보기</summary>
+  <pre id="debug" class="small" style="white-space:pre-wrap; overflow:auto; max-height: 50vh;"></pre>
+</details>
+
+<script>
+  // ---------- 유틸 ----------
+  const $ = s => document.querySelector(s);
+  const banner = $("#banner");
+  const dbg = $("#debug");
+  const copyBtn = $("#copyMd");
+  const csvBtn = $("#downloadCsv");
+
+  function showBanner(type, msg){ banner.className = `banner ${type}`; banner.textContent = msg; }
+  function clearBanner(){ banner.className = ""; banner.textContent = ""; }
+
+  function setDebug(txt){ dbg.textContent = txt || ""; }
+  function appendDebug(txt){
+    if (!txt) return;
+    dbg.textContent += (dbg.textContent ? "\\n" : "") + txt;
+  }
+  const pretty = (obj) => JSON.stringify(obj, null, 2);
+
+  function maskKey(k){
+    if (!k) return "";
+    const t = k.trim();
+    return t.length > 8 ? (t.slice(0,4) + "…" + t.slice(-4)) : "****";
+  }
+  function redactKeyInUrl(u){
+    try {
+      const x = new URL(u);
+      if (x.searchParams.has("authKey")) x.searchParams.set("authKey", maskKey(x.searchParams.get("authKey")));
+      return x.toString();
+    } catch { return u; }
+  }
+
+  function parseISBNs(raw){
+    return raw.split(/\\r?\\n/).map(s => s.trim()).filter(Boolean);
+  }
+
+  function detectApiError(json){
+    const resp = json?.response ?? json;
+    const err = resp?.error ?? json?.error;
+    if (err){
+      return { isError:true, code: err.code ?? err.status ?? err.errorCode ?? null,
+               message: err.message ?? err.msg ?? err.reason ?? err.error ?? "API 오류" };
+    }
+    if (typeof resp?.errCode !== "undefined" || typeof resp?.errMsg !== "undefined"){
+      return { isError:true, code: resp.errCode ?? null, message: resp.errMsg ?? "API 오류" };
+    }
+    return { isError:false };
+  }
+
+  function buildDtlURL(authKey, isbn){
+    // use HTTPS to avoid mixed-content on GitHub Pages
+    const u = new URL("https://data4library.kr/api/srchDtlList");
+    u.searchParams.set("authKey", authKey);
+    u.searchParams.set("isbn13", isbn);
+    u.searchParams.set("format", "json");
+    return u.toString();
+  }
+
+  function pickBook(obj){
+    // 매뉴얼: response → detail → book 에서 bookname, bookImageURL (필드 표기)
+    const resp = obj?.response ?? obj;
+    const det = resp?.detail;
+    const entry = Array.isArray(det) ? det[0] : det;
+    const book = entry?.book ?? entry ?? {};
+    return {
+      isbn13: book.isbn13 ?? book.isbn ?? "",
+      bookname: (book.bookname ?? "").toString(),
+      bookImageURL: (book.bookImageURL ?? "").toString()
+    };
+  }
+
+  async function fetchDtlOnce(authKey, isbn){
+    const url = buildDtlURL(authKey, isbn);
+    appendDebug("srchDtlList 요청: " + redactKeyInUrl(url));
+
+    let res;
+    try { res = await fetch(url, { headers: { "Accept": "application/json" } }); }
+    catch (e) { appendDebug("네트워크 오류: " + e.message); return { isbn13:isbn, error:"네트워크 오류" }; }
+
+    if (res.status === 401 || res.status === 403) return { isbn13:isbn, fatal:true, error:"API 키 권한 오류(401/403)" };
+    if (res.status === 429) return { isbn13:isbn, fatal:true, error:"요청 과다(429)" };
+    if (res.status >= 500) return { isbn13:isbn, fatal:true, error:`서버 오류(${res.status})` };
+
+    let json;
+    try { json = await res.json(); }
+    catch {
+      const text = await res.text();
+      appendDebug("응답(비JSON):\\n" + text.slice(0, 300));
+      return { isbn13:isbn, fatal:true, error:"JSON 아님/응답 형식 오류" };
+    }
+
+    const apiErr = detectApiError(json);
+    if (apiErr.isError){
+      appendDebug("응답(에러 바디):\\n" + pretty(json));
+      return { isbn13:isbn, fatal:true, error: apiErr.message || "API 오류" };
+    }
+
+    const row = pickBook(json);
+    if (!row.isbn13) row.isbn13 = isbn;
+    appendDebug("OK → " + row.isbn13 + " : " + row.bookname);
+    return row;
+  }
+
+  async function runBatch(authKey, isbns){
+    const out = [];
+    for (let i=0;i<isbns.length;i++){
+      const r = await fetchDtlOnce(authKey, isbns[i]);
+      if (r.fatal) throw new Error(r.error);
+      out.push(r);
+      // 살짝 쉬었다 가자 (레이트 리밋 방지)
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return out;
+  }
+
+  function renderTable(rows){
+    const box = $("#tableBox");
+    if (!rows.length){ box.innerHTML = ""; return; }
+
+    // HTML table
+    const html = [`<table><thead><tr><th>bookname</th><th>bookImageURL</th><th>표지</th><th>isbn13</th></tr></thead><tbody>`,
+      ...rows.map(r => {
+        const n = escapeHtml(r.bookname || "");
+        const url = r.bookImageURL || "";
+        const img = url ? `<img src="${escapeAttr(url)}" alt="">` : "";
+        return `<tr>
+          <td>${n}</td>
+          <td class="url"><a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></td>
+          <td>${img}</td>
+          <td>${escapeHtml(r.isbn13 || "")}</td>
+        </tr>`;
+      }),
+      `</tbody></table>`
+    ].join("");
+
+    box.innerHTML = html;
+
+    // Enable actions
+    copyBtn.disabled = false;
+    csvBtn.disabled = false;
+
+    // Prepare MD & CSV
+    const md = [
+      "| bookname | bookImageURL |",
+      "|---|---|",
+      ...rows.map(r => `| ${escapePipes(r.bookname||"")} | ${r.bookImageURL||""} |`)
+    ].join("\\n");
+
+    copyBtn.onclick = async () => {
+      try { await navigator.clipboard.writeText(md); alert("복사 완료!"); }
+      catch { alert("복사 실패. 수동으로 복사해줘."); }
+    };
+
+    csvBtn.onclick = () => {
+      const header = ["bookname","bookImageURL","isbn13"];
+      const data = rows.map(r => [r.bookname||"", r.bookImageURL||"", r.isbn13||""]);
+      const csv = [header, ...data].map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "covers.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+  }
+
+  function escapePipes(s){ return String(s ?? "").replace(/\\|/g, "\\\\|"); }
+  function escapeHtml(s){ return String(s ?? "").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function escapeAttr(s){ return String(s ?? "").replace(/"/g, '&quot;'); }
+
+  // ---------- 버튼 ----------
+  $("#go").onclick = async () => {
+    clearBanner(); setDebug("");
+    copyBtn.disabled = true; csvBtn.disabled = true; $("#tableBox").innerHTML = "";
+
+    const key = $("#key").value.trim();
+    const isbns = parseISBNs($("#isbnBox").value);
+
+    if (!key){ showBanner("error", "API 키 넣어."); return; }
+    if (isbns.length === 0){ showBanner("error", "ISBN이 없음."); return; }
+
+    showBanner("info", "조회 중… (" + maskKey(key) + ")");
+    try {
+      const rows = await runBatch(key, isbns);
+      clearBanner();
+      renderTable(rows);
+    } catch (e){
+      showBanner("error", `중단: ${e.message}`);
+    }
+  };
+</script>
